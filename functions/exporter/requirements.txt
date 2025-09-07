@@ -1,0 +1,6 @@
+# AWS SDK is included in Lambda runtime
+# pandas and pyarrow are provided by AWSSDKPandas-Python313 Lambda Layer
+
+# AWS SDK for local development (already included in Lambda runtime)
+# boto3>=1.34.0
+# botocore>=1.34.0

@@ -1,0 +1,673 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: IAM Activity Tracker - Serverless application for tracking IAM and STS events
+
+Parameters:
+  ScheduleExpression:
+    Type: String
+    Default: rate(1 hour)
+    Description: Schedule expression for the tracker Lambda function (default every hour)
+    AllowedValues:
+      - rate(1 hour)
+      - rate(6 hours)
+      - rate(12 hours)
+      - rate(1 day)
+  
+  ExportScheduleExpression:
+    Type: String
+    Default: rate(1 day)
+    Description: Schedule expression for the export Lambda function (default daily)
+    AllowedValues:
+      - rate(6 hours)
+      - rate(12 hours)
+      - rate(1 day)
+      - rate(7 days)
+  
+  MaxWorkers:
+    Type: Number
+    Default: 16
+    MinValue: 1
+    MaxValue: 32
+    Description: Maximum number of concurrent threads for processing regions
+  
+  LogLevel:
+    Type: String
+    Default: INFO
+    AllowedValues:
+      - DEBUG
+      - INFO
+      - WARNING
+      - ERROR
+    Description: Logging level for Lambda functions
+  
+  ProcessIAMEvents:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Whether to process IAM events
+  
+  ProcessSTSEvents:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Whether to process STS events
+  
+  ProcessSigninEvents:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Whether to process AWS Console signin events
+  
+  ProcessSSOEvents:
+    Type: String
+    Default: 'true'
+    AllowedValues: 
+      - 'true'
+      - 'false'
+    Description: 'Enable processing of AWS SSO/Identity Center events'
+
+  SSORegion:
+    Type: String
+    Default: 'us-east-1'
+    Description: 'AWS region where SSO/Identity Center instance is deployed'
+    AllowedValues:
+      - us-east-1
+      - us-east-2
+      - us-west-1
+      - us-west-2
+      - eu-west-1
+      - eu-west-2
+      - eu-central-1
+      - ap-southeast-1
+      - ap-southeast-2
+      - ap-northeast-1
+      - ap-northeast-2
+      - ap-south-1
+      - ca-central-1
+      - sa-east-1
+  
+  FilterAWSServiceEvents:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Whether to filter out AWS service-linked role events
+  
+  EnableAnalytics:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Whether to enable S3 export and analytics features
+  
+  ExportDaysBack:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 7
+    Description: Number of days back to export in each run
+  
+  EnableSecurityAlerts:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Whether to enable security alerts via SNS
+  
+  AlertsEmailAddress:
+    Type: String
+    Default: ''
+    Description: Email address for security alerts (leave empty to skip email subscription)
+  
+  OffHoursStart:
+    Type: Number
+    Default: 22
+    MinValue: 0
+    MaxValue: 23
+    Description: Start hour for off-hours alerts (24-hour format)
+  
+  OffHoursEnd:
+    Type: Number
+    Default: 6
+    MinValue: 0
+    MaxValue: 23
+    Description: End hour for off-hours alerts (24-hour format)
+
+Globals:
+  Function:
+    Timeout: 300
+    MemorySize: 1024
+    Runtime: python3.13
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        LOG_LEVEL: !Ref LogLevel
+
+Conditions:
+  EnableAnalyticsCondition: !Equals [!Ref EnableAnalytics, 'true']
+  EnableAlertsCondition: !Equals [!Ref EnableSecurityAlerts, 'true']
+  CreateEmailSubscription: !And
+    - !Condition EnableAlertsCondition
+    - !Not [!Equals [!Ref AlertsEmailAddress, '']]
+
+Resources:
+  # SNS Topic for Security Alerts
+  SecurityAlertsTopic:
+    Type: AWS::SNS::Topic
+    Condition: EnableAlertsCondition
+    Properties:
+      TopicName: !Sub ${AWS::StackName}-security-alerts
+      DisplayName: IAM Activity Security Alerts
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: Purpose
+          Value: IAMSecurityAlerts
+  
+  # Email Subscription
+  AlertsEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: CreateEmailSubscription
+    Properties:
+      Protocol: email
+      TopicArn: !Ref SecurityAlertsTopic
+      Endpoint: !Ref AlertsEmailAddress
+
+  # DynamoDB Tables
+  IAMEventsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${AWS::StackName}-events
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: event_date
+          AttributeType: S
+        - AttributeName: event_id
+          AttributeType: S
+        - AttributeName: user_name
+          AttributeType: S
+        - AttributeName: event_name
+          AttributeType: S
+      KeySchema:
+        - AttributeName: event_date
+          KeyType: HASH
+        - AttributeName: event_id
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: user_name-index
+          KeySchema:
+            - AttributeName: user_name
+              KeyType: HASH
+            - AttributeName: event_date
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: event_name-index
+          KeySchema:
+            - AttributeName: event_name
+              KeyType: HASH
+            - AttributeName: event_date
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Purpose
+          Value: IAMActivityTracking
+
+  ControlTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${AWS::StackName}-control
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: region
+          AttributeType: S
+      KeySchema:
+        - AttributeName: region
+          KeyType: HASH
+      Tags:
+        - Key: Purpose
+          Value: IAMActivityTracking
+
+  # Alerts tracking table to prevent duplicate notifications
+  AlertsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${AWS::StackName}-alerts
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: event_id
+          AttributeType: S
+        - AttributeName: alert_type
+          AttributeType: S
+      KeySchema:
+        - AttributeName: event_id
+          KeyType: HASH
+        - AttributeName: alert_type
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      Tags:
+        - Key: Purpose
+          Value: IAMActivityTracking
+
+  # S3 Bucket for Analytics
+  AnalyticsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Condition: EnableAnalyticsCondition
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-analytics-${AWS::AccountId}
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ArchiveOldData
+            Status: Enabled
+            Prefix: iam-events/
+            Transitions:
+              - TransitionInDays: 30
+                StorageClass: STANDARD_IA
+              - TransitionInDays: 90
+                StorageClass: GLACIER
+              - TransitionInDays: 365
+                StorageClass: DEEP_ARCHIVE
+          - Id: DeleteIncompleteUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Purpose
+          Value: IAMAnalytics
+
+  # S3 Bucket for Athena Query Results
+  AthenaResultsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Condition: EnableAnalyticsCondition
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-athena-results-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldQueries
+            Status: Enabled
+            ExpirationInDays: 30  # Delete query results after 30 days
+          - Id: DeleteIncompleteUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Purpose
+          Value: AthenaResults
+
+  # Glue Database for Athena
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Condition: EnableAnalyticsCondition
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: iam_activity_tracker_database
+        Description: Database for IAM activity analytics
+
+  # Glue Crawler
+  GlueCrawler:
+    Type: AWS::Glue::Crawler
+    Condition: EnableAnalyticsCondition
+    Properties:
+      Name: !Sub ${AWS::StackName}-crawler
+      Role: !GetAtt GlueServiceRole.Arn
+      DatabaseName: !Ref GlueDatabase
+      Targets:
+        S3Targets:
+          - Path: !Sub s3://${AnalyticsBucket}/iam-events/
+      Schedule:
+        ScheduleExpression: cron(0 2 * * ? *)  # Daily at 2 AM
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: LOG
+      Configuration: |
+        {
+          "Version": 1.0,
+          "CrawlerOutput": {
+            "Partitions": {"AddOrUpdateBehavior": "InheritFromTable"}
+          }
+        }
+
+  # Lambda Functions
+  IAMActivityTrackerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-tracker
+      Description: Tracks IAM, STS, and Console signin events from CloudTrail across all AWS regions
+      CodeUri: functions/tracker/
+      Handler: handler.lambda_handler
+      Environment:
+        Variables:
+          EVENTS_TABLE_NAME: !Ref IAMEventsTable
+          CONTROL_TABLE_NAME: !Ref ControlTable
+          ALERTS_TABLE_NAME: !Ref AlertsTable
+          MAX_WORKERS: !Ref MaxWorkers
+          PROCESS_IAM_EVENTS: !Ref ProcessIAMEvents
+          PROCESS_STS_EVENTS: !Ref ProcessSTSEvents
+          PROCESS_SIGNIN_EVENTS: !Ref ProcessSigninEvents
+          PROCESS_SSO_EVENTS: !Ref ProcessSSOEvents
+          SSO_REGION: !Ref SSORegion
+          FILTER_AWS_SERVICE_EVENTS: !Ref FilterAWSServiceEvents
+          ALERTS_ENABLED: !Ref EnableSecurityAlerts
+          ALERTS_SNS_TOPIC_ARN: !If [EnableAlertsCondition, !Ref SecurityAlertsTopic, '']
+          AWS_ACCOUNT_ID: !Ref AWS::AccountId
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            # CloudTrail permissions
+            - Effect: Allow
+              Action:
+                - cloudtrail:LookupEvents
+                - ec2:DescribeRegions
+                - sso:DescribeRegisteredRegions
+                - sso:ListInstances
+              Resource: '*'
+            # DynamoDB permissions
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+                - dynamodb:Query
+                - dynamodb:BatchWriteItem
+              Resource:
+                - !GetAtt IAMEventsTable.Arn
+                - !GetAtt ControlTable.Arn
+                - !GetAtt AlertsTable.Arn
+                - !Sub '${IAMEventsTable.Arn}/index/*'
+            # EC2 permissions for getting regions
+            - Effect: Allow
+              Action:
+                - ec2:DescribeRegions
+              Resource: '*'
+            # SNS permissions for alerts
+            - !If
+              - EnableAlertsCondition
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref SecurityAlertsTopic
+              - !Ref AWS::NoValue
+      Events:
+        ScheduledEvent:
+          Type: Schedule
+          Properties:
+            Schedule: !Ref ScheduleExpression
+            Description: Trigger IAM activity tracking
+            Enabled: true
+
+  ExportFunction:
+    Type: AWS::Serverless::Function
+    Condition: EnableAnalyticsCondition
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-exporter
+      Description: Exports IAM events from DynamoDB to S3 in Parquet format for analytics
+      CodeUri: functions/exporter/
+      Handler: export_handler.lambda_handler
+      MemorySize: 2048  # More memory for Pandas/PyArrow processing
+      Timeout: 900  # 15 minutes for large exports
+      Layers:
+        - arn:aws:lambda:eu-west-1:336392948345:layer:AWSSDKPandas-Python313:3
+      Environment:
+        Variables:
+          EVENTS_TABLE_NAME: !Ref IAMEventsTable
+          ANALYTICS_BUCKET_NAME: !Ref AnalyticsBucket
+          EXPORT_DAYS_BACK: !Ref ExportDaysBack
+          PARTITION_BY_REGION: 'true'
+          PARTITION_BY_SOURCE: 'true'
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            # DynamoDB permissions
+            - Effect: Allow
+              Action:
+                - dynamodb:Scan
+                - dynamodb:Query
+              Resource:
+                - !GetAtt IAMEventsTable.Arn
+                - !Sub '${IAMEventsTable.Arn}/index/*'
+            # S3 permissions
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:PutObjectAcl
+                - s3:GetObject
+                - s3:DeleteObject
+                - s3:ListBucket
+                - s3:HeadBucket
+              Resource:
+                - !Sub '${AnalyticsBucket.Arn}/*'
+                - !GetAtt AnalyticsBucket.Arn
+      Events:
+        ScheduledExport:
+          Type: Schedule
+          Properties:
+            Schedule: !Ref ExportScheduleExpression
+            Description: Trigger daily export to S3
+            Enabled: true
+
+  # Glue Service Role
+  GlueServiceRole:
+    Type: AWS::IAM::Role
+    Condition: EnableAnalyticsCondition
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-glue-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt AnalyticsBucket.Arn
+                  - !Sub '${AnalyticsBucket.Arn}/*'
+
+  # Lambda Log Groups
+  TrackerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${IAMActivityTrackerFunction}
+      RetentionInDays: 30
+
+  ExporterLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: EnableAnalyticsCondition
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ExportFunction}
+      RetentionInDays: 30
+
+  # Athena WorkGroup
+  AthenaWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Condition: EnableAnalyticsCondition
+    Properties:
+      Name: !Sub ${AWS::StackName}-workgroup
+      Description: WorkGroup for IAM activity analytics
+      WorkGroupConfiguration:
+        ResultConfiguration:
+          OutputLocation: !Sub s3://${AthenaResultsBucket}/
+        PublishCloudWatchMetricsEnabled: true
+      Tags:
+        - Key: Purpose
+          Value: IAMAnalytics
+
+  # CloudWatch Alarms
+  TrackerErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${AWS::StackName}-tracker-errors
+      AlarmDescription: Alert when tracker Lambda function errors occur
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref IAMActivityTrackerFunction
+      TreatMissingData: notBreaching
+
+  TrackerDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${AWS::StackName}-tracker-duration
+      AlarmDescription: Alert when tracker execution time is high
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 240000  # 4 minutes
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref IAMActivityTrackerFunction
+      TreatMissingData: notBreaching
+
+  ExporterErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: EnableAnalyticsCondition
+    Properties:
+      AlarmName: !Sub ${AWS::StackName}-exporter-errors
+      AlarmDescription: Alert when exporter Lambda function errors occur
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ExportFunction
+      TreatMissingData: notBreaching
+
+  ExporterDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: EnableAnalyticsCondition
+    Properties:
+      AlarmName: !Sub ${AWS::StackName}-exporter-duration
+      AlarmDescription: Alert when exporter execution time is high
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 800000  # 13+ minutes (close to 15 min timeout)
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ExportFunction
+      TreatMissingData: notBreaching
+
+Outputs:
+  TrackerFunctionArn:
+    Description: ARN of the IAM Activity Tracker Lambda function
+    Value: !GetAtt IAMActivityTrackerFunction.Arn
+  
+  ExporterFunctionArn:
+    Description: ARN of the S3 Export Lambda function
+    Condition: EnableAnalyticsCondition
+    Value: !GetAtt ExportFunction.Arn
+  
+  EventsTableName:
+    Description: Name of the DynamoDB table storing IAM events
+    Value: !Ref IAMEventsTable
+  
+  ControlTableName:
+    Description: Name of the DynamoDB control table
+    Value: !Ref ControlTable
+  
+  AnalyticsBucketName:
+    Description: Name of the S3 bucket for analytics data
+    Condition: EnableAnalyticsCondition
+    Value: !Ref AnalyticsBucket
+  
+  AthenaResultsBucketName:
+    Description: Name of the S3 bucket for Athena query results
+    Condition: EnableAnalyticsCondition
+    Value: !Ref AthenaResultsBucket
+  
+  GlueDatabaseName:
+    Description: Name of the Glue database for Athena queries
+    Condition: EnableAnalyticsCondition
+    Value: !Ref GlueDatabase
+  
+  AthenaWorkGroupName:
+    Description: Name of the Athena WorkGroup
+    Condition: EnableAnalyticsCondition
+    Value: !Ref AthenaWorkGroup
+  
+  TrackerScheduleExpression:
+    Description: Schedule expression for the tracker Lambda function
+    Value: !Ref ScheduleExpression
+  
+  ExportScheduleExpression:
+    Description: Schedule expression for the export Lambda function
+    Condition: EnableAnalyticsCondition
+    Value: !Ref ExportScheduleExpression
+  
+  SecurityAlertsTopicArn:
+    Description: ARN of the SNS topic for security alerts
+    Condition: EnableAlertsCondition
+    Value: !Ref SecurityAlertsTopic
+  
+  SecurityAlertsEnabled:
+    Description: Whether security alerts are enabled
+    Value: !Ref EnableSecurityAlerts

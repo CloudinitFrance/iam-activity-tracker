@@ -1,0 +1,6 @@
+# Requirements for Athena query utilities
+# Install with: pip install -r requirements.txt
+
+boto3>=1.34.0
+botocore>=1.34.0
+rich>=13.0.0
