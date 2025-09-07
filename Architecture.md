@@ -131,18 +131,24 @@ A comprehensive serverless solution for tracking IAM, STS, and Console signin ac
   - Message attributes for filtering
   - KMS encryption for sensitive alerts
 
-#### b) **Alert Functions (8 total)**
+#### b) **Alert Functions (14 total)**
 **From `security_alerts.py`**:
 
 1. **`check_root_activity`**: Root account login/failed login (CRITICAL)
 2. **`check_user_creation`**: IAM user creation (HIGH)
 3. **`check_admin_policy_attachment`**: Admin policy attachments (CRITICAL)
-   - Detects: AdministratorAccess, IAMFullAccess, PowerUserAccess
+   - Detects: AdministratorAccess, IAMFullAccess, PowerUserAccess, AWSSSOMasterAccountAdministrator, AWSIdentityCenterFullAccess, AWSSSOMemberAccountAdministrator
 4. **`check_dangerous_inline_policy`**: Policies with *, iam:*, sts:* (CRITICAL)
 5. **`check_access_key_creation`**: New access key generation (CRITICAL)
 6. **`check_role_trust_policy`**: External account/wildcard principals (CRITICAL)
 7. **`check_access_key_update`**: Access key status changes (HIGH)
 8. **`check_mfa_deletion`**: MFA device deletion/deactivation (CRITICAL)
+9. **`check_sso_permission_set_creation`**: SSO permission set creation (CRITICAL)
+10. **`check_sso_permission_set_update`**: SSO permission set updates (CRITICAL)
+11. **`check_sso_admin_policy_attachment`**: Admin policy attached to SSO permission set (CRITICAL)
+12. **`check_sso_account_assignment`**: SSO account assignment created (CRITICAL)
+13. **`check_sso_app_creation`**: SSO managed application instance creation (HIGH)
+14. **`check_sso_app_deletion`**: SSO managed application instance deletion (HIGH)
 
 **Alert Processing**:
 - Real-time analysis of each stored event
@@ -264,7 +270,7 @@ with ThreadPoolExecutor(max_workers=32) as executor:
 
 ## Query System
 
-### Pre-built Queries (9 total)
+### Pre-built Queries (15 total)
 **From `query_runner.py` QUERY_DEFINITIONS**:
 
 1. **`user_lookup`**: User activity patterns and identification
@@ -276,30 +282,34 @@ with ThreadPoolExecutor(max_workers=32) as executor:
 7. **`role_assumptions`**: Role usage patterns and frequency analysis
 8. **`daily_summary`**: Daily activity summaries for compliance reporting
 9. **`hourly_activity`**: Peak usage analysis for capacity planning
+10. **`sso_permission_sets`**: SSO permission set management tracking
+11. **`sso_account_assignments`**: SSO account assignment tracking
+12. **`sso_admin_policies`**: SSO admin policy attachment detection
+13. **`sso_applications`**: SSO application management tracking
+14. **`sso_admin_users`**: SSO administrative users identification
+15. **`sso_activity_summary`**: SSO usage patterns by event type
 
 ### Query Infrastructure
-- **`athena_utilities.py`**: Athena query execution and table management
-- **`query_runner.py`**: CLI interface with Rich terminal formatting
-- **`analytics_queries.sql`**: Raw SQL queries for reference
+- **`athena_utilities.py`**: Core Athena operations (execute_athena_query, create_iam_events_table, get_table_statistics, validate_s3_location)
+- **`query_runner.py`**: Main CLI tool with QUERY_DEFINITIONS dictionary containing all 15 pre-built queries, Rich terminal formatting support
+- **`analytics_queries.sql`**: Reference SQL queries (if present)
 
 ## Operational Scripts
 
 ### Core Scripts (`scripts/` folder)
-- **`deploy.sh`**: SAM deployment with S3 bucket creation
-- **`destroy.sh`**: CloudFormation stack deletion with confirmation
-- **`status.sh`**: Formatted stack status and configuration display
-- **`validate.sh`**: Template validation with linting
-- **`logs.sh`**: Lambda log viewing with color formatting
-- **`run-query.sh`**: Query execution wrapper (calls `queries/setup.sh`)
+- **`deploy.sh`**: SAM deployment with S3 bucket creation, automatic AWS CLI/SAM CLI installation in venv
+- **`destroy.sh`**: CloudFormation stack deletion with confirmation prompt
+- **`status.sh`**: Formatted stack status display with colored output
+- **`validate.sh`**: Template validation
+- **`logs.sh`**: Lambda log viewing
+- **`run-query.sh`**: Query execution wrapper
 - **`setup-athena.sh`**: Athena table initialization
 - **`test-alerts.sh`**: SNS alert testing
 
-### Query Setup (`queries/` folder)
-- **`setup.sh`**: Python virtual environment setup and dependency installation
-  - Creates venv if not exists
-  - Installs requirements.txt
-  - Auto-detects CloudFormation outputs
-  - Provides environment variable setup
+### Query Tools (`queries/` folder)
+- **`query_runner.py`**: Main CLI tool with 15 pre-built analytics queries
+- **`athena_utilities.py`**: Athena query execution and table management
+- **`requirements.txt`**: Python dependencies (boto3, rich for terminal formatting)
 
 ## Security Alert Message Format
 ```
