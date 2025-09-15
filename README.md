@@ -438,7 +438,7 @@ LIMIT 20;
 
 The tool provides rich, formatted output for all queries with execution metrics:
 
-![Query Output Example](assets/Failed_Auth.png)
+![Query Output Example](assets/IAM-Activity-Tracker-Failed-Auth.png)
 
 ### Query Comparison
 
