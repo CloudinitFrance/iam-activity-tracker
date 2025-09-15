@@ -14,7 +14,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import boto3
 from botocore.exceptions import ClientError
 
-from cloudtrail_processor import query_cloudtrail_events, get_active_regions
+from cloudtrail_processor import (
+    query_cloudtrail_events, 
+    get_active_regions,
+    get_filtered_events_count,
+    reset_filtered_events_count,
+    get_filtered_role_patterns
+)
 from dynamodb_operations import (
     batch_write_events,
     get_checkpoint,
@@ -52,6 +58,14 @@ def lambda_handler(event, context):
     """
     logger.info("Starting IAM Activity Tracker")
     logger.info(f"Event: {json.dumps(event)}")
+    
+    # Reset filtered events counter for this execution
+    reset_filtered_events_count()
+    
+    # Log filtered role patterns if configured
+    filtered_patterns = get_filtered_role_patterns()
+    if filtered_patterns:
+        logger.info(f"Role filtering enabled with {len(filtered_patterns)} patterns")
     
     start_time = datetime.now(timezone.utc)
     total_events_processed = 0
@@ -137,12 +151,18 @@ def lambda_handler(event, context):
     # Calculate execution time
     execution_time = (datetime.now(timezone.utc) - start_time).total_seconds()
     
+    # Get filtered events count
+    filtered_count = get_filtered_events_count()
+    if filtered_count > 0:
+        logger.info(f"Filtered out {filtered_count} events based on role patterns")
+    
     # Build response
     response = {
         'statusCode': 200 if not errors else 500,
         'body': {
             'message': 'Processing completed with errors' if errors else 'Processing completed successfully',
             'total_events_processed': total_events_processed,
+            'total_events_filtered': filtered_count,
             'execution_time_seconds': execution_time,
             'errors': errors
         }

@@ -100,6 +100,11 @@ Parameters:
       - 'false'
     Description: Whether to filter out AWS service-linked role events
   
+  FilteredRoles:
+    Type: String
+    Default: ''
+    Description: Comma-separated list of role names/patterns to filter out (e.g., PrismaCloud*,*SecurityScanner*,WizRole). Supports wildcards (*). Leave empty to disable role filtering.
+  
   EnableAnalytics:
     Type: String
     Default: 'true'
@@ -390,6 +395,7 @@ Resources:
           PROCESS_SSO_EVENTS: !Ref ProcessSSOEvents
           SSO_REGION: !Ref SSORegion
           FILTER_AWS_SERVICE_EVENTS: !Ref FilterAWSServiceEvents
+          FILTERED_ROLES: !Ref FilteredRoles
           ALERTS_ENABLED: !Ref EnableSecurityAlerts
           ALERTS_SNS_TOPIC_ARN: !If [EnableAlertsCondition, !Ref SecurityAlertsTopic, '']
           AWS_ACCOUNT_ID: !Ref AWS::AccountId

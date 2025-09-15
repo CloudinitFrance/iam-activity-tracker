@@ -105,6 +105,20 @@ sam build --use-container
 # Deploy the application
 echo -e "${YELLOW}Deploying SAM application...${NC}"
 
+# Show deployment configuration if any custom parameters are set
+if [ ! -z "$FILTERED_ROLES" ] || [ ! -z "$PROCESS_SSO_EVENTS" ] || [ ! -z "$ENABLE_ANALYTICS" ]; then
+    echo -e "${GREEN}Deployment Configuration:${NC}"
+    [ ! -z "$FILTERED_ROLES" ] && echo "  • Role Filtering: $FILTERED_ROLES"
+    [ ! -z "$PROCESS_SSO_EVENTS" ] && echo "  • SSO Events: $PROCESS_SSO_EVENTS"
+    [ ! -z "$SSO_REGION" ] && echo "  • SSO Region: $SSO_REGION"
+    [ ! -z "$ENABLE_ANALYTICS" ] && echo "  • Analytics: $ENABLE_ANALYTICS"
+    [ ! -z "$ENABLE_SECURITY_ALERTS" ] && echo "  • Security Alerts: $ENABLE_SECURITY_ALERTS"
+    [ ! -z "$ALERTS_EMAIL_ADDRESS" ] && echo "  • Alert Email: $ALERTS_EMAIL_ADDRESS"
+    [ ! -z "$SCHEDULE_EXPRESSION" ] && echo "  • Schedule: $SCHEDULE_EXPRESSION"
+    [ ! -z "$MAX_WORKERS" ] && echo "  • Max Workers: $MAX_WORKERS"
+    echo ""
+fi
+
 # Build parameter overrides from environment variables
 PARAMETER_OVERRIDES=""
 if [ ! -z "$PROCESS_SSO_EVENTS" ]; then
@@ -112,6 +126,24 @@ if [ ! -z "$PROCESS_SSO_EVENTS" ]; then
 fi
 if [ ! -z "$SSO_REGION" ]; then
     PARAMETER_OVERRIDES="$PARAMETER_OVERRIDES SSORegion=$SSO_REGION"
+fi
+if [ ! -z "$FILTERED_ROLES" ]; then
+    PARAMETER_OVERRIDES="$PARAMETER_OVERRIDES FilteredRoles=\"$FILTERED_ROLES\""
+fi
+if [ ! -z "$ENABLE_ANALYTICS" ]; then
+    PARAMETER_OVERRIDES="$PARAMETER_OVERRIDES EnableAnalytics=$ENABLE_ANALYTICS"
+fi
+if [ ! -z "$ENABLE_SECURITY_ALERTS" ]; then
+    PARAMETER_OVERRIDES="$PARAMETER_OVERRIDES EnableSecurityAlerts=$ENABLE_SECURITY_ALERTS"
+fi
+if [ ! -z "$ALERTS_EMAIL_ADDRESS" ]; then
+    PARAMETER_OVERRIDES="$PARAMETER_OVERRIDES AlertsEmailAddress=$ALERTS_EMAIL_ADDRESS"
+fi
+if [ ! -z "$SCHEDULE_EXPRESSION" ]; then
+    PARAMETER_OVERRIDES="$PARAMETER_OVERRIDES ScheduleExpression=\"$SCHEDULE_EXPRESSION\""
+fi
+if [ ! -z "$MAX_WORKERS" ]; then
+    PARAMETER_OVERRIDES="$PARAMETER_OVERRIDES MaxWorkers=$MAX_WORKERS"
 fi
 
 # Deploy with parameters if any are set

@@ -1,4 +1,17 @@
 # IAM Activity Tracker Makefile
+#
+# Supported Environment Variables for Deployment:
+#   AWS_REGION              - AWS region for deployment (required)
+#   AWS_PROFILE             - AWS profile to use (required)
+#   STACK_NAME              - CloudFormation stack name (default: iam-activity-tracker)
+#   FILTERED_ROLES          - Comma-separated role patterns to filter (e.g., "PrismaCloud*,Wiz*")
+#   ENABLE_ANALYTICS        - Enable S3/Athena analytics (true/false, default: true)
+#   ENABLE_SECURITY_ALERTS  - Enable SNS security alerts (true/false, default: true)
+#   ALERTS_EMAIL_ADDRESS    - Email for security alerts (optional)
+#   SCHEDULE_EXPRESSION     - Collection frequency (default: "rate(1 hour)")
+#   MAX_WORKERS             - Max parallel threads (1-32, default: 16)
+#   PROCESS_SSO_EVENTS      - Track SSO events (true/false, default: true)
+#   SSO_REGION              - SSO instance region (default: us-east-1)
 
 # Configuration from environment variables
 STACK_NAME ?= iam-activity-tracker
@@ -54,7 +67,20 @@ help: ## Show this help message
 	@echo "$(YELLOW)Examples:$(NC)"
 	@echo "  export AWS_REGION=eu-west-1 AWS_PROFILE=production"
 	@echo "  make deploy"
+	@echo ""
+	@echo "  # Deploy with SSO monitoring:"
 	@echo "  export SSO_REGION=eu-west-1 PROCESS_SSO_EVENTS=true && make deploy"
+	@echo ""
+	@echo "  # Deploy with CSPM role filtering:"
+	@echo "  export FILTERED_ROLES=\"PrismaCloud*,WizSecurityRole,*Scanner*\" && make deploy"
+	@echo ""
+	@echo "  # Deploy with multiple configurations:"
+	@echo "  export FILTERED_ROLES=\"PrismaCloud*,Wiz*,*CSPM*\" \\"
+	@echo "         ENABLE_ANALYTICS=true \\"
+	@echo "         ALERTS_EMAIL_ADDRESS=\"security@example.com\" \\"
+	@echo "         SCHEDULE_EXPRESSION=\"rate(6 hours)\" && make deploy"
+	@echo ""
+	@echo "  # Query examples:"
 	@echo "  make run-query Q=root_usage"
 	@echo "  make logs | grep ERROR"
 

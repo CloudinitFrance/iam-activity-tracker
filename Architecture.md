@@ -78,6 +78,7 @@ A comprehensive serverless solution for tracking IAM, STS, and Console signin ac
   - `PROCESS_STS_EVENTS=true`
   - `PROCESS_SIGNIN_EVENTS=true`
   - `FILTER_AWS_SERVICE_EVENTS=true`
+  - `FILTERED_ROLES=''` (comma-separated role patterns to filter)
   - `ALERTS_ENABLED=true`
   - `MAX_WORKERS=16`
 
@@ -93,6 +94,7 @@ A comprehensive serverless solution for tracking IAM, STS, and Console signin ac
 - Query all active regions for STS events using multi-threading
 - Process up to 32 regions/sources in parallel
 - Smart user name extraction (role names from AssumeRole, root from ConsoleLogin)
+- **Role filtering**: Filter out noisy CSPM/security tool roles using configurable patterns
 - Real-time security alert checking
 - Transform and batch store in DynamoDB
 

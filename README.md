@@ -170,6 +170,77 @@ AWS services generate thousands of routine operational events that create noise 
 - **Cost**: Increases DynamoDB storage and processing costs
 - **Alert fatigue**: Makes it harder to spot actual security incidents
 
+## Role Filtering for CSPM and Security Tools
+
+The tracker supports filtering out specific roles that generate excessive noise, particularly useful for Cloud Security Posture Management (CSPM) tools and security scanners.
+
+### Common Use Cases
+
+Filter out roles used by:
+- **CSPM Tools**: PrismaCloud, Wiz, Orca, Dome9, CloudHealth
+- **Security Scanners**: Qualys, Rapid7, Tenable
+- **Compliance Tools**: AWS Config rules, custom compliance checkers
+- **Monitoring Tools**: DataDog, New Relic, Splunk collectors
+
+### Configuration
+
+Set the `FilteredRoles` parameter during deployment or update:
+
+```bash
+# During deployment
+sam deploy --parameter-overrides FilteredRoles="PrismaCloudRole,WizSecurityRole,*Scanner*"
+
+# Or export before deployment
+export FILTERED_ROLES="PrismaCloud*,Wiz*,OrcaSecurityRole,*CSPM*"
+make deploy
+```
+
+### Filter Pattern Syntax
+
+The filter supports multiple pattern types:
+
+1. **Exact role names**: `SecurityAuditRole`
+2. **Wildcards**: `*SecurityScanner*`, `CSPM-*`, `*-audit-role`
+3. **Full ARNs**: `arn:aws:iam::123456789012:role/PrismaCloudRole`
+4. **Multiple patterns**: Comma-separated list
+
+### What Gets Filtered?
+
+When a role matches your filter patterns:
+- **AssumeRole events** for that role are not stored
+- **All subsequent actions** by that assumed role session are filtered
+- Events are counted but not stored in DynamoDB
+- Filter metrics are included in Lambda execution logs
+
+### Example Configurations
+
+```bash
+# Filter common CSPM tools
+FilteredRoles="PrismaCloud*,WizSecurityRole,OrcaSecurityRole,Dome9-Connect"
+
+# Filter by pattern
+FilteredRoles="*SecurityScanner*,*CSPM*,*Compliance*"
+
+# Filter specific ARNs
+FilteredRoles="arn:aws:iam::123456789012:role/SecurityAudit,arn:aws:iam::123456789012:role/CloudHealth"
+
+# Mixed patterns
+FilteredRoles="PrismaCloud*,*Scanner*,arn:aws:iam::123456789012:role/SpecificRole"
+```
+
+### Monitoring Filtered Events
+
+The Lambda response includes filtering statistics:
+```json
+{
+  "total_events_processed": 1500,
+  "total_events_filtered": 8500,  // Events filtered out
+  "execution_time_seconds": 45.2
+}
+```
+
+This helps you understand the impact of filtering and validate your patterns are working correctly.
+
 ## Configuration Options
 
 ### Environment Variables
@@ -192,6 +263,7 @@ AWS services generate thousands of routine operational events that create noise 
 | `PROCESS_SSO_EVENTS` | true | Track AWS SSO/Identity Center events |
 | `SSO_REGION` | us-east-1 | Primary region for SSO events |
 | `FILTER_AWS_SERVICE_EVENTS` | true | Filter out AWS service-linked role events |
+| `FILTERED_ROLES` | '' | Comma-separated list of role names/patterns to filter (e.g., `PrismaCloud*,WizRole,*SecurityScanner*`). Supports wildcards (*) |
 
 #### Analytics Configuration
 | Variable | Default | Description |

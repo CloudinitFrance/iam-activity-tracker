@@ -5,8 +5,10 @@ Handles querying CloudTrail for IAM and STS events across regions.
 """
 
 import logging
+import os
+import re
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 
 import boto3
 from botocore.exceptions import ClientError
@@ -22,6 +24,114 @@ config = Config(
     },
     max_pool_connections=50
 )
+
+# Role filtering configuration
+FILTERED_ROLES = os.environ.get('FILTERED_ROLES', '')
+_filtered_role_patterns = None
+_filtered_events_count = 0
+
+
+def get_filtered_role_patterns() -> List[re.Pattern]:
+    """
+    Parse and compile role filter patterns from environment variable.
+    Supports wildcards (*) and returns compiled regex patterns.
+    
+    Returns:
+        List of compiled regex patterns for role filtering
+    """
+    global _filtered_role_patterns
+    
+    if _filtered_role_patterns is not None:
+        return _filtered_role_patterns
+    
+    _filtered_role_patterns = []
+    
+    if not FILTERED_ROLES:
+        return _filtered_role_patterns
+    
+    # Split by comma and clean up whitespace
+    role_filters = [r.strip() for r in FILTERED_ROLES.split(',') if r.strip()]
+    
+    for role_filter in role_filters:
+        # Convert wildcard pattern to regex
+        # Escape special regex characters except *
+        pattern = re.escape(role_filter).replace('\\*', '.*')
+        
+        # Handle both role names and full ARNs
+        # If it looks like an ARN, use it as-is
+        if role_filter.startswith('arn:aws:iam::'):
+            regex_pattern = f'^{pattern}$'
+        else:
+            # For role names, create a pattern that matches:
+            # 1. The role name in an ARN (after the last /)
+            # 2. The role name at the beginning of a string
+            # 3. The role name after a / in assumed role sessions
+            regex_pattern = f'(^{pattern}$|^{pattern}/|/{pattern}$|/{pattern}/)'
+        
+        try:
+            compiled_pattern = re.compile(regex_pattern, re.IGNORECASE)
+            _filtered_role_patterns.append(compiled_pattern)
+            logger.info(f"Added role filter pattern: {role_filter} -> {regex_pattern}")
+        except re.error as e:
+            logger.error(f"Invalid role filter pattern '{role_filter}': {e}")
+    
+    if _filtered_role_patterns:
+        logger.info(f"Initialized {len(_filtered_role_patterns)} role filter patterns")
+    
+    return _filtered_role_patterns
+
+
+def is_role_filtered(role_arn: str = None, user_name: str = None) -> bool:
+    """
+    Check if a role or user should be filtered based on configured patterns.
+    
+    Args:
+        role_arn: Role ARN from AssumeRole events
+        user_name: User name from the event
+        
+    Returns:
+        True if the role/user should be filtered out, False otherwise
+    """
+    global _filtered_events_count
+    
+    patterns = get_filtered_role_patterns()
+    
+    if not patterns:
+        return False
+    
+    # Check role ARN if provided
+    if role_arn:
+        for pattern in patterns:
+            if pattern.search(role_arn):
+                _filtered_events_count += 1
+                logger.debug(f"Filtered role ARN: {role_arn}")
+                return True
+    
+    # Check user name if provided
+    if user_name:
+        for pattern in patterns:
+            if pattern.search(user_name):
+                _filtered_events_count += 1
+                logger.debug(f"Filtered user name: {user_name}")
+                return True
+    
+    return False
+
+
+def get_filtered_events_count() -> int:
+    """
+    Get the count of filtered events in this execution.
+    
+    Returns:
+        Number of events filtered
+    """
+    return _filtered_events_count
+
+
+def reset_filtered_events_count():
+    """Reset the filtered events counter."""
+    global _filtered_events_count
+    _filtered_events_count = 0
 
 
 def get_active_regions() -> List[str]:
@@ -184,11 +294,46 @@ def parse_cloudtrail_event(event: Dict[str, Any], filter_aws_services: bool = Tr
             logger.debug(f"Filtering out AWS service event: {parsed_event['EventName']} by {user_identity.get('type')}")
             return None
         
+        # Check if this event should be filtered based on role patterns
+        if check_role_filtering(parsed_event):
+            return None
+        
         return parsed_event
         
     except Exception as e:
         logger.error(f"Error parsing CloudTrail event: {e}")
         return None
+
+
+def check_role_filtering(event: Dict[str, Any]) -> bool:
+    """
+    Check if an event should be filtered based on configured role patterns.
+    
+    This is particularly useful for filtering out noisy CSPM tools like:
+    - PrismaCloud, Wiz, Orca, Dome9, etc.
+    - Security scanners that assume roles frequently
+    - Automated compliance tools
+    
+    Args:
+        event: Parsed CloudTrail event
+        
+    Returns:
+        bool: True if event should be filtered, False otherwise
+    """
+    # For AssumeRole events, check the role being assumed
+    if event.get('EventName') == 'AssumeRole':
+        request_params = event.get('RequestParameters', {})
+        if isinstance(request_params, dict):
+            role_arn = request_params.get('roleArn')
+            if role_arn and is_role_filtered(role_arn=role_arn):
+                return True
+    
+    # Check the user name for any event
+    user_name = event.get('userName')
+    if user_name and is_role_filtered(user_name=user_name):
+        return True
+    
+    return False
 
 
 def is_service_linked_role_event(event: Dict[str, Any]) -> bool:
