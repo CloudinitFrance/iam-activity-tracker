@@ -135,6 +135,16 @@ The deployment will:
 - Create an S3 bucket for deployment artifacts (if needed)
 - Deploy the CloudFormation stack
 - Set up all required resources
+- **Automatically offer to initialize the system** (recommended)
+
+**Immediate Initialization**
+After deployment, the system will ask if you want to initialize immediately. This will:
+1. Collect up to 90 days of historical CloudTrail events (1-5 minutes)
+2. Export data to S3 in Parquet format (if analytics enabled)
+3. Set up Athena tables automatically
+4. Run Glue crawler to discover partitions
+
+**Without initialization, you would need to wait 25+ hours before analytics are ready!**
 
 ### 3. View Available Commands
 
@@ -145,6 +155,33 @@ make help
 ![Make Help](assets/IAM-Activity-Tracker-Help.png)
 
 This shows all available commands including deployment, queries, and utilities.
+
+## Deployment Options
+
+### Standard Deployment (Recommended)
+```bash
+export AWS_REGION=us-east-1
+export AWS_PROFILE=production
+make deploy
+# Choose 'Y' when prompted for initialization
+```
+
+This provides the best user experience with immediate access to analytics.
+
+### Deploy Without Initialization
+```bash
+make deploy
+# Choose 'n' when prompted for initialization
+```
+
+Use this if you want to wait for scheduled collection (1 hour + 24 hours).
+
+### Initialize Later
+```bash
+make init
+```
+
+Run this anytime after deployment to collect historical data and set up analytics.
 
 ## AWS Service Event Filtering
 
@@ -375,9 +412,20 @@ aws dynamodb query \
 Perfect for historical analysis, compliance reporting, and complex queries.
 
 #### Quick Setup
+
+**Option 1: Automatic (Recommended)**
+The system will automatically set up Athena during deployment initialization.
+
+**Option 2: Manual Setup**
+If you skipped initialization, run this after the first export:
 ```bash
-# Create Athena tables (run after deployment and first export)
 make setup-athena
+```
+
+**Option 3: Initialize Later**
+If you deployed without initialization, you can run it anytime:
+```bash
+make init
 ```
 
 ![Setup Athena](assets/IAM-Activity-Tracker-Setup-Athena.png)

@@ -191,48 +191,54 @@ if [ "$ANALYTICS_ENABLED" == "true" ]; then
     ATHENA_WORKGROUP=$(echo "$OUTPUTS" | jq -r '.[] | select(.OutputKey=="AthenaWorkGroupName") | .OutputValue // empty')
 fi
 
-echo -e "${GREEN}IAM Activity Tracker is now running!${NC}"
+echo -e "${GREEN}IAM Activity Tracker is now deployed!${NC}"
 echo ""
-echo "System Status:"
-echo "  • Tracker Lambda: Runs ${SCHEDULE_EXPRESSION:-every hour}"
-if [ "$ANALYTICS_ENABLED" == "true" ]; then
-    echo "  • Exporter Lambda: Runs ${EXPORT_SCHEDULE_EXPRESSION:-daily}"
-    echo "  • Analytics: Enabled with S3 + Athena"
+
+# Ask if user wants to run initialization
+echo -e "${YELLOW}IMPORTANT: Initialize the system now?${NC}"
+echo ""
+echo "The initialization will:"
+echo "  1. Collect up to 90 days of historical CloudTrail events"
+echo "  2. Export data to S3 (if analytics enabled)"
+echo "  3. Setup Athena tables automatically"
+echo "  4. Make the system immediately ready for use"
+echo ""
+echo -e "${GREEN}Without initialization, you would need to wait:${NC}"
+echo "  - 1 hour for first data collection"
+echo "  - 24 hours for first S3 export"
+echo ""
+
+read -p "Run initialization now? (recommended) [Y/n]: " -n 1 -r
+echo ""
+
+if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+    echo ""
+    bash scripts/post-deploy-init.sh
 else
-    echo "  • Analytics: Disabled (DynamoDB only)"
+    echo ""
+    echo -e "${YELLOW}Skipping initialization. The system will start collecting data on schedule.${NC}"
+    echo ""
+    echo "System Schedule:"
+    echo "  - Tracker Lambda: Runs ${SCHEDULE_EXPRESSION:-every hour}"
+    if [ "$ANALYTICS_ENABLED" == "true" ]; then
+        echo "  - Exporter Lambda: Runs ${EXPORT_SCHEDULE_EXPRESSION:-daily}"
+        echo "  - Analytics: Enabled with S3 + Athena"
+    else
+        echo "  - Analytics: Disabled (DynamoDB only)"
+    fi
+    echo ""
+    echo "To initialize manually later, run:"
+    echo "  ${GREEN}make init${NC}"
+    echo ""
 fi
-echo ""
 
-echo "Monitoring:"
-echo "  • CloudWatch Logs: /aws/lambda/${STACK_NAME}-tracker"
-if [ "$ANALYTICS_ENABLED" == "true" ]; then
-    echo "  • Export Logs: /aws/lambda/${STACK_NAME}-exporter"
-fi
-echo "  • CloudWatch Alarms: Set up for function errors and high duration"
+echo "Monitoring Commands:"
+echo "  - CloudWatch Logs: ${GREEN}make logs${NC}"
+echo "  - System Status: ${GREEN}make status${NC}"
+echo "  - View Queries: ${GREEN}make list-queries${NC}"
 echo ""
-
-if [ "$ANALYTICS_ENABLED" == "true" ] && [ ! -z "$ANALYTICS_BUCKET" ]; then
-    echo "Analytics Setup:"
-    echo "  • S3 Bucket: $ANALYTICS_BUCKET"
-    echo "  • Glue Database: $GLUE_DATABASE"
-    echo "  • Athena WorkGroup: $ATHENA_WORKGROUP"
-    echo ""
-    echo "Next Steps for Analytics:"
-    echo "  1. Wait 24+ hours for initial data export"
-    echo "  2. Run Glue Crawler to discover partitions:"
-    echo "     aws glue start-crawler --name ${STACK_NAME}-crawler"
-    echo ""
-    echo "  3. Set up Athena table with query utilities:"
-    echo "     cd queries/"
-    echo "     python query_runner.py setup --s3-location s3://${ANALYTICS_BUCKET}/iam-events/"
-    echo ""
-    echo "  4. Run sample analytics queries:"
-    echo "     python query_runner.py list"
-    echo "     python query_runner.py run failed_auth"
-    echo ""
-fi
 
 echo "Documentation:"
-echo "  • README.md: Complete setup and usage guide"
-echo "  • queries/: Pre-built analytics queries"
-echo "  • Architecture.md: System design details"
+echo "  - README.md: Complete setup and usage guide"
+echo "  - queries/: Pre-built analytics queries"
+echo "  - Architecture.md: System design details"

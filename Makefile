@@ -41,6 +41,7 @@ help: ## Show this help message
 	@echo ""
 	@echo "$(GREEN)Deployment Commands:$(NC)"
 	@echo "  make deploy              Deploy the IAM Activity Tracker stack"
+	@echo "  make init                Initialize system (collect data immediately)"
 	@echo "  make destroy             Delete the stack and all resources"
 	@echo "  make update              Update an existing deployment"
 	@echo "  make status              Show stack status and configuration"
@@ -104,6 +105,9 @@ validate: check-sam ## Validate the CloudFormation template
 deploy: ## Deploy the IAM Activity Tracker (auto-installs tools in venv)
 	@bash scripts/deploy.sh
 
+init: check-aws ## Initialize system after deployment (run data collection immediately)
+	@bash scripts/post-deploy-init.sh
+
 update: deploy ## Update an existing deployment
 
 destroy: check-prereqs ## Delete all resources (WARNING: Deletes all data!)
@@ -163,6 +167,6 @@ l: logs ## Shortcut for logs
 q: list-queries ## Shortcut for list-queries
 
 # Phony targets
-.PHONY: help check-aws check-sam check-prereqs build validate deploy update destroy \
+.PHONY: help check-aws check-sam check-prereqs build validate deploy init update destroy \
         status logs logs-follow test-alerts list-queries run-query setup-athena \
         clean d s l q
